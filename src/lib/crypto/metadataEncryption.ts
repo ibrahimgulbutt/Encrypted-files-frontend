@@ -58,6 +58,15 @@ export async function decryptMetadata(
   salt?: string;
 }> {
   try {
+    console.log('🔍 METADATA DECRYPTION DEBUG:')
+    console.log('Raw encrypted metadata:', typeof encryptedMetadata, encryptedMetadata?.length || 'undefined')
+    console.log('Metadata sample:', encryptedMetadata?.substring(0, 100) || 'N/A')
+    
+    // Validate input
+    if (!encryptedMetadata || typeof encryptedMetadata !== 'string') {
+      throw new Error(`Invalid metadata: ${typeof encryptedMetadata}`)
+    }
+    
     // Convert from base64
     const combined = Uint8Array.from(atob(encryptedMetadata), c => c.charCodeAt(0))
 

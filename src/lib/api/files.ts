@@ -15,14 +15,20 @@ export const filesApi = {
   async uploadFile(
     encryptedFile: Blob, 
     encryptedFilename: string, 
-    encryptedMetadata: any, 
+    metadata: any, 
     fileSize: number
   ): Promise<UploadFileResponse> {
+    console.log('📡 FILES API DEBUG:')
+    console.log('Metadata received:', metadata)
+    console.log('Metadata type:', typeof metadata)
+    
     const formData = new FormData()
     formData.append('file', encryptedFile)
     formData.append('encrypted_filename', encryptedFilename)
-    formData.append('encrypted_metadata', JSON.stringify(encryptedMetadata))
+    formData.append('encrypted_metadata', JSON.stringify(metadata))
     formData.append('file_size', fileSize.toString())
+    
+    console.log('Final metadata JSON:', JSON.stringify(metadata))
 
     const response = await apiClient.post<UploadFileResponse>('/files/upload', formData, {
       headers: {

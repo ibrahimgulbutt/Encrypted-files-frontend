@@ -27,6 +27,33 @@ async function encryptValue(value: string, masterKey: CryptoKey): Promise<string
   
   return btoa(String.fromCharCode(...combined))
 }
+
+// Helper function to decrypt a simple string value
+async function decryptValue(encryptedValue: string, masterKey: CryptoKey): Promise<string> {
+  try {
+    // Decode from base64
+    const combined = Uint8Array.from(atob(encryptedValue), c => c.charCodeAt(0))
+    
+    // Extract IV (first 12 bytes) and encrypted data (rest)
+    const iv = combined.slice(0, 12)
+    const encryptedData = combined.slice(12)
+    
+    // Decrypt value
+    const decryptedValue = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv },
+      masterKey,
+      encryptedData
+    )
+    
+    // Convert back to string
+    const decoder = new TextDecoder()
+    return decoder.decode(decryptedValue)
+  } catch (error) {
+    console.error('Failed to decrypt value:', error)
+    throw new Error('Decryption failed')
+  }
+}
+
 import { useAuthStore } from './authStore'
 import toast from 'react-hot-toast'
 
@@ -85,20 +112,65 @@ export const useFileStore = create<FileState>()(
 
           const response = await filesApi.getFiles({ page, limit })
           
+          console.log('📋 FETCH FILES DEBUG:')
+          console.log('Server response files:', response.files.length)
+          if (response.files.length > 0) {
+            console.log('First file sample:', response.files[0])
+          }
+          
           // Decrypt filenames and metadata for display
           const filesWithDecryptedNames = await Promise.all(
             response.files.map(async (file) => {
-              try {
-                const metadata = await decryptMetadata(file.encrypted_metadata, masterKey)
-                return {
-                  ...file,
-                  originalName: metadata.filename,
-                  mimeType: metadata.mimeType,
-                  originalSize: metadata.size,
-                  uploadedAt: file.uploaded_at,
-                  updatedAt: file.last_accessed || file.uploaded_at
+            console.log(`Processing file ${file.id}:`, {
+                encrypted_filename: file.encrypted_filename?.length,
+                encrypted_metadata: typeof file.encrypted_metadata,
+                encrypted_metadata_value: file.encrypted_metadata
+              })
+              
+                          // Backend returns structured metadata object per API docs
+            console.log('🔍 BACKEND METADATA DEBUG:', {
+              type: typeof file.encrypted_metadata,
+              isObject: typeof file.encrypted_metadata === 'object',
+              keys: typeof file.encrypted_metadata === 'object' ? Object.keys(file.encrypted_metadata || {}) : null,
+              metadata: file.encrypted_metadata
+            })
+            
+            try {
+              // Extract data from backend's structured metadata
+              const metadata = file.encrypted_metadata
+              if (!metadata || typeof metadata !== 'object') {
+                throw new Error('Invalid metadata structure from backend')
+              }
+              
+              // Decrypt the encrypted metadata fields using master key
+              let originalName = 'Unknown File'
+              let mimeType = 'application/octet-stream'
+              
+              if (metadata.encrypted_original_name) {
+                try {
+                  originalName = await decryptValue(metadata.encrypted_original_name, masterKey)
+                } catch (error) {
+                  console.warn('Failed to decrypt original name:', error)
                 }
-              } catch (error) {
+              }
+              
+              if (metadata.encrypted_type) {
+                try {
+                  mimeType = await decryptValue(metadata.encrypted_type, masterKey)
+                } catch (error) {
+                  console.warn('Failed to decrypt mime type:', error)
+                }
+              }
+              
+              return {
+                ...file,
+                originalName: originalName,
+                mimeType: mimeType,
+                originalSize: file.file_size, // Use the actual file size
+                uploadedAt: file.uploaded_at,
+                updatedAt: file.last_accessed || file.uploaded_at
+              }
+            } catch (error) {
                 console.error('Error decrypting metadata for file:', file.id, error)
                 return {
                   ...file,
@@ -157,6 +229,11 @@ export const useFileStore = create<FileState>()(
             message: 'Encrypting file...'
           })
 
+          console.log('🚀 UPLOAD PROCESS DEBUG:')
+          console.log('Starting encryption for file:', file.name)
+          console.log('File size:', file.size, 'bytes')
+          console.log('Using master key from store')
+
           const encryptedFileData = await encryptFile(file, masterKey)
 
           // Encrypt metadata
@@ -210,20 +287,25 @@ export const useFileStore = create<FileState>()(
           // Encrypt the complete metadata
           const encryptedMetadata = await encryptMetadata(fileMetadata, masterKey)
           
-          // Prepare server metadata (for backward compatibility)
+          // Prepare metadata object as expected by backend validation
           const serverMetadata = {
             encrypted_size: encryptedSize,
-            encrypted_type: encryptedType,
+            encrypted_type: encryptedType, 
             encrypted_original_name: encryptedOriginalName,
-            encrypted_key: encryptedFileData.encryptedKey,
+            encryption_key: encryptedFileData.encryptedKey,
             iv: encryptedFileData.iv,
-            salt: encryptedFileData.salt
+            salt: encryptedFileData.salt, // Key IV needed to decrypt the encryption key
+            checksum: "" // TODO: Add checksum if needed
           }
+          
+          console.log('📤 UPLOAD API CALL DEBUG:')
+          console.log('Server metadata object:', serverMetadata)
+          console.log('Encrypted metadata for internal use:', encryptedMetadata.substring(0, 100))
           
           await filesApi.uploadFile(
             encryptedBlob,
             encryptedFilename,
-            encryptedMetadata, // Use the encrypted metadata that includes keys
+            serverMetadata, // Send structured metadata as backend expects
             file.size
           )
 
@@ -277,44 +359,132 @@ export const useFileStore = create<FileState>()(
           
           toast.loading('Decrypting file...', { id: fileId })
 
-          // Decrypt metadata to get original filename and encryption keys
-          const metadata = await decryptMetadata(file.encrypted_metadata, masterKey)
-          
-          // Debug: Check metadata structure
-          console.log('Decrypted metadata:', metadata)
-          console.log('encryptedKey exists:', !!metadata.encryptedKey)
+          console.log('📥 DOWNLOAD PROCESS DEBUG:')
+          console.log('File ID:', fileId)
+          console.log('Using master key from store')
+          console.log('File object:', file)
+          console.log('Encrypted metadata:', typeof file.encrypted_metadata, file.encrypted_metadata)
+          console.log('Encrypted metadata length:', file.encrypted_metadata?.length || 'undefined')
 
-          // Work directly with ArrayBuffer to avoid base64 conversion issues
+          // Backend returns structured metadata 
+          const metadata = file.encrypted_metadata
+          
+          console.log('🔍 DOWNLOAD METADATA DEBUG:', {
+            type: typeof metadata,
+            isObject: typeof metadata === 'object',
+            keys: typeof metadata === 'object' ? Object.keys(metadata || {}) : null,
+            hasEncryptionKey: !!metadata?.encryption_key,
+            hasIV: !!metadata?.iv,
+            metadata: metadata
+          })
+
+          // Validate metadata structure from backend
+          if (!metadata || typeof metadata !== 'object') {
+            throw new Error('Invalid metadata structure from backend')
+          }
+          
+          // Backend now provides encryption_key, iv, and salt directly
+          if (!metadata.encryption_key || !metadata.iv || !metadata.salt) {
+            throw new Error('Missing encryption keys in metadata')
+          }
+          
+          console.log('🔑 BACKEND KEYS DEBUG:')
+          console.log('Encryption key exists:', !!metadata.encryption_key)
+          console.log('IV exists:', !!metadata.iv)
+          console.log('Salt exists:', !!metadata.salt)
+          console.log('Encryption key:', metadata.encryption_key.substring(0, 50) + '...')
+          console.log('File IV:', metadata.iv)
+          console.log('Key salt:', metadata.salt)
+          
+          // Decrypt filename and mime type for download
+          let originalName = 'Unknown File'
+          let mimeType = 'application/octet-stream'
+          
+          if (metadata.encrypted_original_name) {
+            try {
+              originalName = await decryptValue(metadata.encrypted_original_name, masterKey)
+            } catch (error) {
+              console.warn('Failed to decrypt original name:', error)
+            }
+          }
+          
+          if (metadata.encrypted_type) {
+            try {
+              mimeType = await decryptValue(metadata.encrypted_type, masterKey)
+            } catch (error) {
+              console.warn('Failed to decrypt mime type:', error)
+            }
+          }
+
+          // Get encrypted file data
           const encryptedDataBuffer = await encryptedFileBlob.arrayBuffer()
           
-          // Check if metadata has encryption keys (new format)
-          if (!metadata.encryptedKey || !metadata.iv || !metadata.salt) {
-            // Handle legacy files - these were uploaded before we fixed the metadata format
-            console.warn('Legacy file detected - encryption keys not found in metadata')
-            console.log('Available file fields:', Object.keys(file))
-            
-            throw new Error('This file was uploaded with an older version that stored encryption keys differently. The download feature is not available for legacy files. Please delete and re-upload this file to enable downloads.')
+          // Decrypt the file encryption key using master key
+          const encryptedKeyData = Uint8Array.from(atob(metadata.encryption_key), c => c.charCodeAt(0))
+          console.log('Encrypted key data length:', encryptedKeyData.length)
+          
+          // Get the key IV (salt) used to encrypt the file key
+          if (!metadata.salt) {
+            throw new Error('Missing salt (key IV) in metadata - needed to decrypt file key')
           }
           
-          // Extract encryption info from metadata and convert from base64 to ArrayBuffer
-          const encryptionData = {
-            encryptedData: encryptedDataBuffer,
-            encryptedKey: base64ToUint8Array(metadata.encryptedKey).buffer as ArrayBuffer,
-            iv: base64ToUint8Array(metadata.iv).buffer as ArrayBuffer,
-            salt: base64ToUint8Array(metadata.salt).buffer as ArrayBuffer
-          }
-
-          // Decrypt file using buffer-based method
-          const decryptedFile = await decryptFileFromBuffer(
-            encryptionData,
+          const keyIV = Uint8Array.from(atob(metadata.salt), c => c.charCodeAt(0))
+          console.log('Key IV length:', keyIV.length)
+          
+          console.log('� DECRYPTING FILE KEY:')
+          console.log('Encrypted key length:', encryptedKeyData.length, '(should be 48)')
+          console.log('Key IV length:', keyIV.length, '(should be 12)')
+          
+          // Decrypt the file key using master key and key IV
+          const decryptedKeyData = await crypto.subtle.decrypt(
+            { name: 'AES-GCM', iv: keyIV },
             masterKey,
-            metadata.filename,
-            metadata.mimeType
+            encryptedKeyData
           )
-
-          // Create and download blob
-          const blob = createDownloadBlob(decryptedFile)
-          triggerFileDownload(blob, metadata.filename)
+          
+          const decryptedKeyArray = new Uint8Array(decryptedKeyData)
+          console.log('Decrypted key length:', decryptedKeyArray.length, '(should be 32)')
+          
+          // Import the decrypted file key
+          const fileKey = await crypto.subtle.importKey(
+            'raw',
+            decryptedKeyArray,
+            { name: 'AES-GCM' },
+            false,
+            ['decrypt']
+          )
+          
+          // Convert base64 IV to Uint8Array
+          const ivBytes = Uint8Array.from(atob(metadata.iv), c => c.charCodeAt(0))
+          console.log('IV length:', ivBytes.length)
+          
+          // Decrypt the file data
+          console.log('Starting file decryption...')
+          const decryptedData = await crypto.subtle.decrypt(
+            {
+              name: 'AES-GCM',
+              iv: ivBytes
+            },
+            fileKey,
+            encryptedDataBuffer
+          )
+          
+          console.log('File decrypted successfully, size:', decryptedData.byteLength)
+          
+          // Create download blob
+          const decryptedBlob = new Blob([decryptedData], { type: mimeType })
+          const downloadUrl = URL.createObjectURL(decryptedBlob)
+          
+          // Trigger download
+          const downloadLink = document.createElement('a')
+          downloadLink.href = downloadUrl
+          downloadLink.download = originalName
+          document.body.appendChild(downloadLink)
+          downloadLink.click()
+          document.body.removeChild(downloadLink)
+          
+          // Clean up
+          URL.revokeObjectURL(downloadUrl)
 
           toast.success('File downloaded successfully!', { id: fileId })
           
@@ -438,7 +608,12 @@ export const useFileStore = create<FileState>()(
           const filesWithDecryptedNames = await Promise.all(
             response.files.map(async (file) => {
               try {
-                const metadata = await decryptMetadata(file.encrypted_metadata, masterKey)
+                // Handle new format where encrypted_metadata is an object containing the actual encrypted metadata string
+                const encryptedMetadataString = typeof file.encrypted_metadata === 'object' 
+                  ? file.encrypted_metadata?.encrypted_metadata 
+                  : file.encrypted_metadata;
+                
+                const metadata = await decryptMetadata(encryptedMetadataString, masterKey)
                 return {
                   ...file,
                   originalName: metadata.filename

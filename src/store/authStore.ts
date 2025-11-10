@@ -86,23 +86,33 @@ export const useAuthStore = create<AuthState>()(
       login: async (email: string, password: string) => {
         set({ isLoading: true })
         
+        console.log('🔐 LOGIN PROCESS DEBUG:')
+        console.log('Email:', email)
+        console.log('Password length:', password.length)
+        
         try {
           // Get user's salt from server (secure approach)
           const { salt: userSalt } = await authApi.getSalt(email)
+          console.log('Retrieved salt from server (hex):', userSalt)
           
           // Hash password with salt for server
           const passwordHash = await hashPassword(password, userSalt)
+          console.log('Password hash for server:', passwordHash.substring(0, 20) + '...')
           
           // Login user
           const response = await authApi.login({
             email,
             password_hash: passwordHash
           })
+          console.log('Server login successful, user ID:', response.user.id)
           
           // Generate master key using the same salt from server
+          console.log('Deriving master key from password...')
           const masterKey = await deriveKeyFromPassword(password, userSalt)
+          console.log('Master key derived successfully')
           
           // Store master key locally (encrypted with session password)
+          console.log('Storing master key in IndexedDB...')
           await storeMasterKey(response.user.id, masterKey, password)
           
           set({

@@ -10,9 +10,16 @@ export async function deriveKeyFromPassword(
   password: string,
   salt: string
 ): Promise<CryptoKey> {
+  console.log('🔑 MASTER KEY DERIVATION DEBUG:')
+  console.log('Password length:', password.length)
+  console.log('Salt (base64):', salt)
+  
   const encoder = new TextEncoder()
   const passwordBuffer = encoder.encode(password)
   const saltBuffer = Uint8Array.from(atob(salt), c => c.charCodeAt(0))
+  
+  console.log('Salt buffer (hex):', Array.from(saltBuffer).map(b => b.toString(16).padStart(2, '0')).join(''))
+  console.log('Password buffer length:', passwordBuffer.length, 'bytes')
 
   // Import password as raw key material
   const keyMaterial = await crypto.subtle.importKey(
@@ -24,6 +31,7 @@ export async function deriveKeyFromPassword(
   )
 
   // Derive AES-256 key using PBKDF2
+  console.log('Deriving key with PBKDF2 (100,000 iterations)...')
   const derivedKey = await crypto.subtle.deriveKey(
     {
       name: 'PBKDF2',
@@ -36,6 +44,10 @@ export async function deriveKeyFromPassword(
     true, // Make key extractable so we can store it
     ['encrypt', 'decrypt']
   )
+
+  // Debug: Export and log the derived master key
+  const exportedKey = await crypto.subtle.exportKey('raw', derivedKey)
+  console.log('Derived master key (hex):', Array.from(new Uint8Array(exportedKey)).map(b => b.toString(16).padStart(2, '0')).join(''))
 
   return derivedKey
 }

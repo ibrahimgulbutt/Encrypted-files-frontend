@@ -66,53 +66,80 @@ export function base64ToUint8Array(base64: string): Uint8Array {
 export async function encryptFile(
   file: File,
   masterKey: CryptoKey
-): Promise<Omit<EncryptedFile, 'id' | 'userId' | 'createdAt' | 'updatedAt'>> {
-  // Generate random file key
+): Promise<EncryptedFile> {
+  console.log('📁 FILE ENCRYPTION DEBUG:')
+  console.log('File name:', file.name)
+  console.log('File size:', file.size, 'bytes')
+  console.log('File type:', file.type)
+  
+  // Generate random file encryption key
   const fileKey = await crypto.subtle.generateKey(
     { name: 'AES-GCM', length: 256 },
     true,
     ['encrypt', 'decrypt']
   )
+  
+  // Debug: Export and log file key
+  const exportedFileKeyDebug = await crypto.subtle.exportKey('raw', fileKey)
+  console.log('Generated file key (hex):', Array.from(new Uint8Array(exportedFileKeyDebug)).map(b => b.toString(16).padStart(2, '0')).join(''))
 
   // Read file as ArrayBuffer
   const fileData = await file.arrayBuffer()
 
   // Generate IV for file encryption
   const fileIV = generateIV()
+  console.log('Generated file IV (hex):', Array.from(fileIV).map(b => b.toString(16).padStart(2, '0')).join(''))
 
   // Encrypt file data with file key
+  console.log('Encrypting file data...')
   const encryptedFileData = await crypto.subtle.encrypt(
     { name: 'AES-GCM', iv: fileIV as BufferSource },
     fileKey,
     fileData
   )
+  console.log('File encrypted, size:', encryptedFileData.byteLength, 'bytes')
 
   // Export file key for encryption with master key
   const exportedFileKey = await crypto.subtle.exportKey('raw', fileKey)
 
   // Generate IV for file key encryption
   const keyIV = generateIV()
+  console.log('Generated key IV (hex):', Array.from(keyIV).map(b => b.toString(16).padStart(2, '0')).join(''))
 
   // Encrypt file key with master key
+  console.log('Encrypting file key with master key...')
   const encryptedFileKey = await crypto.subtle.encrypt(
     { name: 'AES-GCM', iv: keyIV as BufferSource },
     masterKey,
     exportedFileKey
   )
+  console.log('File key encrypted, size:', encryptedFileKey.byteLength, 'bytes')
 
   // Convert to base64 for transmission (chunked for large files)
+  console.log('Converting to base64...')
   const encryptedData = arrayBufferToBase64(encryptedFileData)
   const encryptedKey = arrayBufferToBase64(encryptedFileKey)
   const iv = arrayBufferToBase64(fileIV)
   const salt = arrayBufferToBase64(keyIV)
+  
+  console.log('📦 ENCRYPTION RESULTS:')
+  console.log('Encrypted data (base64 length):', encryptedData.length)
+  console.log('Encrypted key (base64):', encryptedKey.substring(0, 50) + '...')
+  console.log('File IV (base64):', iv)
+  console.log('Key IV/Salt (base64):', salt)
+  console.log('Original file size:', file.size)
 
   return {
+    id: '',
+    userId: '',
     encryptedData,
     encryptedKey,
     iv,
     salt,
     size: file.size,
-    encrypted_metadata: ''
+    encrypted_metadata: '',
+    createdAt: '',
+    updatedAt: ''
   }
 }
 
@@ -135,14 +162,24 @@ export async function decryptFileFromBuffer(
   filename: string,
   mimeType: string
 ): Promise<DecryptedFileData> {
+  console.log('🔓 FILE DECRYPTION DEBUG:')
+  console.log('Filename:', filename)
+  console.log('MIME type:', mimeType)
+  console.log('Encrypted data size:', encryptedFile.encryptedData.byteLength, 'bytes')
+  console.log('Encrypted key size:', encryptedFile.encryptedKey.byteLength, 'bytes')
+  console.log('File IV (hex):', Array.from(new Uint8Array(encryptedFile.iv)).map(b => b.toString(16).padStart(2, '0')).join(''))
+  console.log('Key IV/Salt (hex):', Array.from(new Uint8Array(encryptedFile.salt)).map(b => b.toString(16).padStart(2, '0')).join(''))
   // Decrypt file key with master key
+  console.log('Decrypting file key with master key...')
   const decryptedFileKeyBuffer = await crypto.subtle.decrypt(
     { name: 'AES-GCM', iv: encryptedFile.salt },
     masterKey,
     encryptedFile.encryptedKey
   )
+  console.log('File key decrypted, key (hex):', Array.from(new Uint8Array(decryptedFileKeyBuffer)).map(b => b.toString(16).padStart(2, '0')).join(''))
 
   // Import decrypted file key
+  console.log('Importing decrypted file key...')
   const fileKey = await crypto.subtle.importKey(
     'raw',
     decryptedFileKeyBuffer,
@@ -150,13 +187,17 @@ export async function decryptFileFromBuffer(
     false,
     ['decrypt']
   )
+  console.log('File key imported successfully')
 
   // Decrypt file data
+  console.log('Decrypting file data with file key...')
   const decryptedFileBuffer = await crypto.subtle.decrypt(
     { name: 'AES-GCM', iv: encryptedFile.iv },
     fileKey,
     encryptedFile.encryptedData
   )
+  console.log('File data decrypted successfully, size:', decryptedFileBuffer.byteLength, 'bytes')
+  console.log('✅ DECRYPTION COMPLETE')
 
   return {
     data: decryptedFileBuffer,

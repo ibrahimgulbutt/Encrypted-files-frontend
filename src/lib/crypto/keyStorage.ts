@@ -56,7 +56,13 @@ export async function storeMasterKey(
       ['deriveKey']
     )
 
+    console.log('🔑 MASTER KEY STORAGE DEBUG:')
+    console.log('User ID:', userId)
+    console.log('Session password length:', sessionPassword.length)
+    
     const salt = crypto.getRandomValues(new Uint8Array(16))
+    console.log('Generated salt (hex):', Array.from(salt).map(b => b.toString(16).padStart(2, '0')).join(''))
+    
     const storageKey = await crypto.subtle.deriveKey(
       {
         name: 'PBKDF2',
@@ -69,6 +75,10 @@ export async function storeMasterKey(
       false,
       ['encrypt']
     )
+    
+    // Debug: Export and log master key
+    console.log('Master key to store (hex):', Array.from(new Uint8Array(exportedKey)).map(b => b.toString(16).padStart(2, '0')).join(''))
+    console.log('Master key length:', exportedKey.byteLength, 'bytes')
 
     // Encrypt master key
     const iv = crypto.getRandomValues(new Uint8Array(12))
@@ -128,6 +138,12 @@ export async function retrieveMasterKey(
     const iv = combined.slice(16, 28)
     const encryptedKey = combined.slice(28)
 
+    console.log('🔓 MASTER KEY RETRIEVAL DEBUG:')
+    console.log('User ID:', userId)
+    console.log('Retrieved salt (hex):', Array.from(salt).map(b => b.toString(16).padStart(2, '0')).join(''))
+    console.log('Retrieved IV (hex):', Array.from(iv).map(b => b.toString(16).padStart(2, '0')).join(''))
+    console.log('Session password length:', sessionPassword.length)
+
     // Derive storage key from session password
     const encoder = new TextEncoder()
     const passwordBuffer = encoder.encode(sessionPassword)
@@ -167,6 +183,9 @@ export async function retrieveMasterKey(
       false,
       ['encrypt', 'decrypt']
     )
+
+    console.log('Retrieved master key (hex):', Array.from(new Uint8Array(decryptedKeyBuffer)).map(b => b.toString(16).padStart(2, '0')).join(''))
+    console.log('Master key successfully retrieved and imported')
 
     return masterKey
   } catch (error) {
